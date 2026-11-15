@@ -248,13 +248,13 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 		String displayName = Text.removeTags(target);
 
 		int idx = -1;
-		client.createMenuEntry(idx--)
+		client.getMenu().createMenuEntry(idx--)
 			.setOption(ColorUtil.wrapWithColorTag(blacklisted ? "Hider un-blacklist" : "Hider blacklist", BLACKLIST_COLOR))
 			.setTarget(target)
 			.setIdentifier(id)
 			.setType(MenuAction.RUNELITE)
 			.onClick(e -> toggleList(id, displayName, "blacklist", blacklistKey, !blacklisted, whitelistKey));
-		client.createMenuEntry(idx)
+		client.getMenu().createMenuEntry(idx)
 			.setOption(ColorUtil.wrapWithColorTag(whitelisted ? "Hider un-whitelist" : "Hider whitelist", WHITELIST_COLOR))
 			.setTarget(target)
 			.setIdentifier(id)
