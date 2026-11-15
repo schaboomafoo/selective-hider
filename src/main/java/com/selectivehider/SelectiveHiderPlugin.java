@@ -2,11 +2,12 @@ package com.selectivehider;
 
 import com.google.inject.Provides;
 import java.awt.Color;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
@@ -60,7 +61,7 @@ import net.runelite.client.util.Text;
 
 @PluginDescriptor(
 	name = "Selective Hider",
-	description = "Hides everything, then lets you choose what to draw by category, ID or name. Requires a GPU plugin.",
+	description = "Hides everything, then lets you choose what to draw by category or name. Requires a GPU plugin.",
 	tags = {"hide", "hider", "blindfold", "greenscreen", "render", "pvm", "scenery", "entity", "npc", "object"}
 )
 @Slf4j
@@ -77,6 +78,7 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 	private static final String KEY_WHITELIST_OBJECTS = "whitelistObjects";
 	private static final String KEY_BLACKLIST_OBJECTS = "blacklistObjects";
 	private static final String KEY_LEARNED_OBJECTS = "learnedObjectIds";
+	private static final String KEY_FORGET_LEARNED = "forgetLearnedObjects";
 
 	private static final Color WHITELIST_COLOR = new Color(0x4C, 0xD9, 0x4C);
 	private static final Color BLACKLIST_COLOR = new Color(0xFF, 0x55, 0x55);
@@ -142,7 +144,7 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 	{
 		settings = Settings.from(config);
 		learnedObjectIds.clear();
-		learnedObjectIds.addAll(IdNameList.parse(config.learnedObjectIds()).ids);
+		learnedObjectIds.addAll(parseIdCsv(config.learnedObjectIds()));
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
 			// Already in an area: treat everything present as part of the load
@@ -179,11 +181,18 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 		String key = event.getKey();
 		if (KEY_LEARNED_OBJECTS.equals(key))
 		{
-			// Written by us as objects are learned, or edited by hand. Never reload for it:
-			// that would cause a reload mid-fight every time a new mechanic is learned.
-			Set<Integer> ids = IdNameList.parse(event.getNewValue()).ids;
-			learnedObjectIds.retainAll(ids);
-			learnedObjectIds.addAll(ids);
+			// Internal storage written by the plugin itself; nothing to re-read
+			return;
+		}
+		if (KEY_FORGET_LEARNED.equals(key))
+		{
+			if (Boolean.parseBoolean(event.getNewValue()))
+			{
+				learnedObjectIds.clear();
+				saveLearnedIds();
+				configManager.setConfiguration(SelectiveHiderConfig.GROUP, KEY_FORGET_LEARNED, "false");
+				reloadArea();
+			}
 			return;
 		}
 
@@ -226,66 +235,77 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			{
 				return;
 			}
-			int id = npc.getId();
-			addListEntries(event, id,
-				s.whitelistNpcs.ids.contains(id), KEY_WHITELIST_NPCS,
-				s.blacklistNpcs.ids.contains(id), KEY_BLACKLIST_NPCS);
+			String name = npc.getName();
+			if (name == null || name.isEmpty())
+			{
+				return;
+			}
+			addListEntries(event, name, -1,
+				s.whitelistNpcs.contains(name), KEY_WHITELIST_NPCS,
+				s.blacklistNpcs.contains(name), KEY_BLACKLIST_NPCS);
 		}
 		else if (entry.getType() == MenuAction.EXAMINE_OBJECT)
 		{
-			int id = event.getIdentifier();
-			addListEntries(event, id,
-				s.whitelistObjects.ids.contains(id), KEY_WHITELIST_OBJECTS,
-				s.blacklistObjects.ids.contains(id), KEY_BLACKLIST_OBJECTS);
+			int objectId = event.getIdentifier();
+			ObjectComposition def = resolvedDefinition(objectId);
+			String name = def == null ? null : def.getName();
+			if (name == null || name.isEmpty() || "null".equals(name))
+			{
+				return;
+			}
+			addListEntries(event, name, objectId,
+				s.whitelistObjects.contains(name), KEY_WHITELIST_OBJECTS,
+				s.blacklistObjects.contains(name), KEY_BLACKLIST_OBJECTS);
 		}
 	}
 
-	private void addListEntries(MenuEntryAdded event, int id,
+	/**
+	 * @param objectId the object's ID if this is an object, so blacklisting it also forgets it
+	 *                 as a learned mechanic; -1 for NPCs. Lists themselves only ever hold names.
+	 */
+	private void addListEntries(MenuEntryAdded event, String name, int objectId,
 		boolean whitelisted, String whitelistKey,
 		boolean blacklisted, String blacklistKey)
 	{
 		String target = event.getTarget();
-		String displayName = Text.removeTags(target);
 
 		int idx = -1;
 		client.getMenu().createMenuEntry(idx--)
 			.setOption(ColorUtil.wrapWithColorTag(blacklisted ? "Hider un-blacklist" : "Hider blacklist", BLACKLIST_COLOR))
 			.setTarget(target)
-			.setIdentifier(id)
 			.setType(MenuAction.RUNELITE)
-			.onClick(e -> toggleList(id, displayName, "blacklist", blacklistKey, !blacklisted, whitelistKey));
+			.onClick(e -> toggleList(name, objectId, "blacklist", blacklistKey, !blacklisted, whitelistKey));
 		client.getMenu().createMenuEntry(idx)
 			.setOption(ColorUtil.wrapWithColorTag(whitelisted ? "Hider un-whitelist" : "Hider whitelist", WHITELIST_COLOR))
 			.setTarget(target)
-			.setIdentifier(id)
 			.setType(MenuAction.RUNELITE)
-			.onClick(e -> toggleList(id, displayName, "whitelist", whitelistKey, !whitelisted, blacklistKey));
+			.onClick(e -> toggleList(name, objectId, "whitelist", whitelistKey, !whitelisted, blacklistKey));
 	}
 
 	/**
-	 * Adds the ID to (or removes it from) one list, keeping any names and other entries in it.
-	 * Adding also removes the ID from the opposite list, so it's never on both.
+	 * Adds the name to (or removes it from) one list, keeping the other entries in it.
+	 * Adding also removes the name from the opposite list, so it's never on both.
 	 * Blacklisting an object also forgets it as a learned mechanic.
 	 */
-	private void toggleList(int id, String displayName, String listName, String key, boolean add, String oppositeKey)
+	private void toggleList(String name, int objectId, String listName, String key, boolean add, String oppositeKey)
 	{
-		IdNameList list = IdNameList.parse(configManager.getConfiguration(SelectiveHiderConfig.GROUP, key));
+		NameList list = NameList.parse(configManager.getConfiguration(SelectiveHiderConfig.GROUP, key));
 		if (add)
 		{
-			IdNameList opposite = IdNameList.parse(configManager.getConfiguration(SelectiveHiderConfig.GROUP, oppositeKey));
-			if (opposite.ids.contains(id))
+			NameList opposite = NameList.parse(configManager.getConfiguration(SelectiveHiderConfig.GROUP, oppositeKey));
+			if (opposite.contains(name))
 			{
-				configManager.setConfiguration(SelectiveHiderConfig.GROUP, oppositeKey, opposite.without(id).serialize());
+				configManager.setConfiguration(SelectiveHiderConfig.GROUP, oppositeKey, opposite.without(name).serialize());
 			}
-			if (KEY_BLACKLIST_OBJECTS.equals(key) && learnedObjectIds.remove(id))
+			if (KEY_BLACKLIST_OBJECTS.equals(key) && objectId != -1 && learnedObjectIds.remove(objectId))
 			{
 				saveLearnedIds();
 			}
-			configManager.setConfiguration(SelectiveHiderConfig.GROUP, key, list.with(id).serialize());
+			configManager.setConfiguration(SelectiveHiderConfig.GROUP, key, list.with(name).serialize());
 		}
 		else
 		{
-			configManager.setConfiguration(SelectiveHiderConfig.GROUP, key, list.without(id).serialize());
+			configManager.setConfiguration(SelectiveHiderConfig.GROUP, key, list.without(name).serialize());
 		}
 
 		// The settings panel doesn't refresh while it's open, so confirm in chat instead
@@ -294,7 +314,7 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 		Color color = "blacklist".equals(listName) ? BLACKLIST_COLOR : WHITELIST_COLOR;
 		chatMessageManager.queue(QueuedMessage.builder()
 			.type(ChatMessageType.CONSOLE)
-			.runeLiteFormattedMessage("Selective Hider: " + verb + " " + displayName + " (" + id + ") "
+			.runeLiteFormattedMessage("Selective Hider: " + verb + " " + name + " "
 				+ preposition + " the " + ColorUtil.wrapWithColorTag(listName, color) + ".")
 			.build());
 	}
@@ -302,7 +322,29 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 	private void saveLearnedIds()
 	{
 		configManager.setConfiguration(SelectiveHiderConfig.GROUP, KEY_LEARNED_OBJECTS,
-			new IdNameList(learnedObjectIds, Collections.emptySet()).serialize());
+			new TreeSet<>(learnedObjectIds).stream().map(String::valueOf).collect(Collectors.joining(",")));
+	}
+
+	/** Reads the plugin's own internal list of learned object IDs. */
+	private static Set<Integer> parseIdCsv(String csv)
+	{
+		Set<Integer> ids = new HashSet<>();
+		if (csv == null)
+		{
+			return ids;
+		}
+		for (String part : csv.split(","))
+		{
+			try
+			{
+				ids.add(Integer.parseInt(part.trim()));
+			}
+			catch (NumberFormatException ignored)
+			{
+				// Skip anything malformed
+			}
+		}
+		return ids;
 	}
 
 	// ------------------------------------------------- mechanic object learning
@@ -510,12 +552,8 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 		return null;
 	}
 
-	private boolean matchesObject(IdNameList list, int objectId)
+	private boolean matchesObject(NameList list, int objectId)
 	{
-		if (list.ids.contains(objectId))
-		{
-			return true;
-		}
 		if (list.names.isEmpty())
 		{
 			return false;
@@ -524,17 +562,9 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 		return name != null && list.names.contains(name);
 	}
 
-	private static boolean matchesNpc(IdNameList list, NPC npc)
+	private static boolean matchesNpc(NameList list, NPC npc)
 	{
-		if (list.ids.contains(npc.getId()))
-		{
-			return true;
-		}
-		if (list.names.isEmpty() || npc.getName() == null)
-		{
-			return false;
-		}
-		return list.names.contains(Text.standardize(npc.getName()));
+		return list.contains(npc.getName());
 	}
 
 	// --------------------------------------------------------- render decisions
@@ -667,15 +697,6 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 
 		if (renderable instanceof GraphicsObject)
 		{
-			int id = ((GraphicsObject) renderable).getId();
-			if (s.blacklistSpotanims.ids.contains(id))
-			{
-				return false;
-			}
-			if (s.whitelistSpotanims.ids.contains(id))
-			{
-				return true;
-			}
 			return s.showSpotanims;
 		}
 
@@ -758,12 +779,10 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 		final boolean showBoats;
 		final boolean hideHiddenEntityUi;
 
-		final IdNameList whitelistNpcs;
-		final IdNameList whitelistObjects;
-		final IdNameList whitelistSpotanims;
-		final IdNameList blacklistNpcs;
-		final IdNameList blacklistObjects;
-		final IdNameList blacklistSpotanims;
+		final NameList whitelistNpcs;
+		final NameList whitelistObjects;
+		final NameList blacklistNpcs;
+		final NameList blacklistObjects;
 
 		private Settings()
 		{
@@ -779,8 +798,8 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			showTerrain = true;
 			showBoats = false;
 			hideHiddenEntityUi = false;
-			whitelistNpcs = whitelistObjects = whitelistSpotanims = IdNameList.EMPTY;
-			blacklistNpcs = blacklistObjects = blacklistSpotanims = IdNameList.EMPTY;
+			whitelistNpcs = whitelistObjects = NameList.EMPTY;
+			blacklistNpcs = blacklistObjects = NameList.EMPTY;
 		}
 
 		private Settings(SelectiveHiderConfig c)
@@ -797,12 +816,10 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			showTerrain = c.showTerrain();
 			showBoats = c.showBoats();
 			hideHiddenEntityUi = c.hideHiddenEntityUi();
-			whitelistNpcs = IdNameList.parse(c.whitelistNpcs());
-			whitelistObjects = IdNameList.parse(c.whitelistObjects());
-			whitelistSpotanims = IdNameList.parse(c.whitelistSpotanims());
-			blacklistNpcs = IdNameList.parse(c.blacklistNpcs());
-			blacklistObjects = IdNameList.parse(c.blacklistObjects());
-			blacklistSpotanims = IdNameList.parse(c.blacklistSpotanims());
+			whitelistNpcs = NameList.parse(c.whitelistNpcs());
+			whitelistObjects = NameList.parse(c.whitelistObjects());
+			blacklistNpcs = NameList.parse(c.blacklistNpcs());
+			blacklistObjects = NameList.parse(c.blacklistObjects());
 		}
 
 		boolean hasObjectNames()

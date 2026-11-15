@@ -14,14 +14,14 @@ public interface SelectiveHiderConfig extends Config
 
 	@ConfigSection(
 		name = "Show categories",
-		description = "Everything is hidden unless its category is ticked here or its ID is whitelisted.",
+		description = "Everything is hidden unless its category is ticked here or its name is whitelisted.",
 		position = 0
 	)
 	String categories = "categories";
 
 	@ConfigSection(
 		name = "Whitelist (always show)",
-		description = "IDs that are always drawn, even when their category is hidden.",
+		description = "Names that are always drawn, even when their category is hidden.",
 		position = 1,
 		closedByDefault = true
 	)
@@ -29,24 +29,16 @@ public interface SelectiveHiderConfig extends Config
 
 	@ConfigSection(
 		name = "Blacklist (always hide)",
-		description = "IDs that are always hidden, even when their category is shown. The blacklist beats the whitelist.",
+		description = "Names that are always hidden, even when their category is shown. The blacklist beats the whitelist.",
 		position = 2,
 		closedByDefault = true
 	)
 	String blacklist = "blacklist";
 
 	@ConfigSection(
-		name = "Learned mechanic objects",
-		description = "Object IDs picked up automatically by 'Mechanic objects (auto)'.",
-		position = 3,
-		closedByDefault = true
-	)
-	String learned = "learned";
-
-	@ConfigSection(
 		name = "Advanced",
-		description = "Menu options and hitbars.",
-		position = 4,
+		description = "Menu options, hitbars and learned mechanic objects.",
+		position = 3,
 		closedByDefault = true
 	)
 	String advanced = "advanced";
@@ -106,8 +98,8 @@ public interface SelectiveHiderConfig extends Config
 
 	@ConfigItem(keyName = "showSpawnedObjects", name = "Mechanic objects (auto)",
 		description = "Draw objects that appear mid-play and have no menu options (acid pools, hazards, etc.),<br>"
-			+ "even while scenery is hidden. Learned IDs are listed under 'Learned mechanic objects'.<br>"
-			+ "Blacklisted objects are never learned, so blacklist anything unwanted, like \"Tree stump\".",
+			+ "even while scenery is hidden, and remember them for next time.<br>"
+			+ "Blacklisted objects are never learned, so blacklist anything unwanted, like Tree stump.",
 		position = 7, section = categories)
 	default boolean showSpawnedObjects()
 	{
@@ -144,46 +136,32 @@ public interface SelectiveHiderConfig extends Config
 
 	// --------------------------------------------------------------- whitelist
 
-	@ConfigItem(keyName = "whitelistNpcs", name = "NPCs", description = "Comma-separated NPC IDs or quoted names to always draw, e.g. 1234, \"Great Olm\".",
+	@ConfigItem(keyName = "whitelistNpcs", name = "NPCs", description = "Comma-separated NPC names to always draw, e.g. Great Olm, Sol Heredit",
 		position = 0, section = whitelist)
 	default String whitelistNpcs()
 	{
 		return "";
 	}
 
-	@ConfigItem(keyName = "whitelistObjects", name = "Objects", description = "Comma-separated object IDs or quoted names to always draw, e.g. 1234, \"Acid pool\".",
+	@ConfigItem(keyName = "whitelistObjects", name = "Objects", description = "Comma-separated object names to always draw, e.g. Acid pool",
 		position = 1, section = whitelist)
 	default String whitelistObjects()
 	{
 		return "";
 	}
 
-	@ConfigItem(keyName = "whitelistSpotanims", name = "Spotanim IDs", description = "Comma-separated spotanim (graphic) IDs to always draw.",
-		position = 2, section = whitelist)
-	default String whitelistSpotanims()
-	{
-		return "";
-	}
-
 	// --------------------------------------------------------------- blacklist
 
-	@ConfigItem(keyName = "blacklistNpcs", name = "NPCs", description = "Comma-separated NPC IDs or quoted names to always hide, e.g. 1234, \"Rat\".",
+	@ConfigItem(keyName = "blacklistNpcs", name = "NPCs", description = "Comma-separated NPC names to always hide, e.g. Rat, Giant rat",
 		position = 0, section = blacklist)
 	default String blacklistNpcs()
 	{
 		return "";
 	}
 
-	@ConfigItem(keyName = "blacklistObjects", name = "Objects", description = "Comma-separated object IDs or quoted names to always hide, e.g. 1234, \"Tree stump\".",
+	@ConfigItem(keyName = "blacklistObjects", name = "Objects", description = "Comma-separated object names to always hide, e.g. Tree stump, Rocks",
 		position = 1, section = blacklist)
 	default String blacklistObjects()
-	{
-		return "";
-	}
-
-	@ConfigItem(keyName = "blacklistSpotanims", name = "Spotanim IDs", description = "Comma-separated spotanim (graphic) IDs to always hide.",
-		position = 2, section = blacklist)
-	default String blacklistSpotanims()
 	{
 		return "";
 	}
@@ -207,11 +185,17 @@ public interface SelectiveHiderConfig extends Config
 		return false;
 	}
 
-	@ConfigItem(keyName = "learnedObjectIds", name = "Learned IDs",
-		description = "Object IDs picked up automatically by 'Mechanic objects (auto)'.<br>"
-			+ "To stop one showing, blacklist it (shift-right-click it in-game) rather than deleting it here,<br>"
-			+ "otherwise it may be learned again. Takes effect on the next area load.",
-		position = 0, section = learned)
+	@ConfigItem(keyName = "forgetLearnedObjects", name = "Forget learned objects",
+		description = "Tick to forget every object 'Mechanic objects (auto)' has learned. It unticks itself.<br>"
+			+ "To stop just one object showing, blacklist it by name instead.",
+		position = 2, section = advanced)
+	default boolean forgetLearnedObjects()
+	{
+		return false;
+	}
+
+	/** Internal storage for 'Mechanic objects (auto)'. Hidden: filled by the plugin, never typed in. */
+	@ConfigItem(keyName = "learnedObjectIds", name = "", description = "", hidden = true)
 	default String learnedObjectIds()
 	{
 		return "";
