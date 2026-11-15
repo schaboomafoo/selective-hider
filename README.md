@@ -4,7 +4,7 @@ Hides everything in the game world, then lets you choose what to draw.
 
 - **Show categories**: yourself, other players, NPCs, pets, projectiles, spotanims (tile effects), ground items, mechanic objects, scenery, terrain, other boats, and the interface.
 - **Whitelist / Blacklist**: NPC and object names to always show or always hide, e.g. `Tree stump, Rocks`. The blacklist beats the whitelist, which beats the categories.
-- **Shift-right-click** an NPC or object to whitelist or blacklist it by name. A chat message confirms the change.
+- **Shift-right-click** an NPC or object to whitelist or blacklist it. NPCs are added by name; objects are remembered individually (just the one you clicked, by name and tile). A chat message confirms the change.
 - **Mechanic objects (auto)**: shows objects that appear mid-play and have no menu options (acid pools and similar), and remembers them. Blacklisted objects are never learned.
 
 ## Screenshots

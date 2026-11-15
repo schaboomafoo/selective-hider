@@ -2,7 +2,9 @@ package com.selectivehider;
 
 import com.google.inject.Provides;
 import java.awt.Color;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -34,6 +36,8 @@ import net.runelite.api.TileItem;
 import net.runelite.api.TileObject;
 import net.runelite.api.WorldEntity;
 import net.runelite.api.WorldView;
+import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.DecorativeObjectDespawned;
 import net.runelite.api.events.DecorativeObjectSpawned;
 import net.runelite.api.events.GameObjectDespawned;
@@ -70,15 +74,16 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 	/** Config keys whose effect is baked in when an area loads, so changing them needs a reload. */
 	private static final Set<String> RELOAD_KEYS = Set.of(
 		"showScenery", "showTerrain", "showSpawnedObjects", "showGroundItems",
-		"whitelistObjects", "blacklistObjects"
+		"whitelistObjects", "blacklistObjects", "pinnedWhitelistObjects", "pinnedBlacklistObjects"
 	);
 
 	private static final String KEY_WHITELIST_NPCS = "whitelistNpcs";
 	private static final String KEY_BLACKLIST_NPCS = "blacklistNpcs";
-	private static final String KEY_WHITELIST_OBJECTS = "whitelistObjects";
-	private static final String KEY_BLACKLIST_OBJECTS = "blacklistObjects";
 	private static final String KEY_LEARNED_OBJECTS = "learnedObjectIds";
 	private static final String KEY_FORGET_LEARNED = "forgetLearnedObjects";
+	private static final String KEY_PINNED_WHITELIST = "pinnedWhitelistObjects";
+	private static final String KEY_PINNED_BLACKLIST = "pinnedBlacklistObjects";
+	private static final String KEY_FORGET_PINNED = "forgetPinnedObjects";
 
 	private static final Color WHITELIST_COLOR = new Color(0x4C, 0xD9, 0x4C);
 	private static final Color BLACKLIST_COLOR = new Color(0xFF, 0x55, 0x55);
@@ -195,6 +200,16 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			}
 			return;
 		}
+		if (KEY_FORGET_PINNED.equals(key))
+		{
+			if (Boolean.parseBoolean(event.getNewValue()))
+			{
+				configManager.setConfiguration(SelectiveHiderConfig.GROUP, KEY_PINNED_WHITELIST, "");
+				configManager.setConfiguration(SelectiveHiderConfig.GROUP, KEY_PINNED_BLACKLIST, "");
+				configManager.setConfiguration(SelectiveHiderConfig.GROUP, KEY_FORGET_PINNED, "false");
+			}
+			return;
+		}
 
 		settings = Settings.from(config);
 		if (RELOAD_KEYS.contains(key))
@@ -240,30 +255,170 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			{
 				return;
 			}
-			addListEntries(event, name, -1,
+			addListEntries(event, name,
 				s.whitelistNpcs.contains(name), KEY_WHITELIST_NPCS,
 				s.blacklistNpcs.contains(name), KEY_BLACKLIST_NPCS);
 		}
 		else if (entry.getType() == MenuAction.EXAMINE_OBJECT)
 		{
-			int objectId = event.getIdentifier();
-			ObjectComposition def = resolvedDefinition(objectId);
+			WorldView wv = client.getWorldView(entry.getWorldViewId());
+			if (wv == null)
+			{
+				return;
+			}
+			TileObject object = findTileObject(wv, event.getActionParam0(), event.getActionParam1(), event.getIdentifier());
+			if (object == null)
+			{
+				return;
+			}
+			ObjectComposition def = resolvedDefinition(object.getId());
 			String name = def == null ? null : def.getName();
 			if (name == null || name.isEmpty() || "null".equals(name))
 			{
 				return;
 			}
-			addListEntries(event, name, objectId,
-				s.whitelistObjects.contains(name), KEY_WHITELIST_OBJECTS,
-				s.blacklistObjects.contains(name), KEY_BLACKLIST_OBJECTS);
+			PinnedObject pinned = pin(name, object, wv.getScene());
+			addPinnedEntries(event, pinned, name, object.getId(),
+				s.pinnedWhitelist.contains(pinned), s.pinnedBlacklist.contains(pinned));
 		}
 	}
 
-	/**
-	 * @param objectId the object's ID if this is an object, so blacklisting it also forgets it
-	 *                 as a learned mechanic; -1 for NPCs. Lists themselves only ever hold names.
-	 */
-	private void addListEntries(MenuEntryAdded event, String name, int objectId,
+	private PinnedObject pin(String name, TileObject object, Scene scene)
+	{
+		return new PinnedObject(name, templateLocation(object, scene));
+	}
+
+	/** The object's tile; in instances, the template tile, so it's the same on every visit. */
+	private static WorldPoint templateLocation(TileObject object, Scene scene)
+	{
+		LocalPoint local = object.getLocalLocation();
+		if (local == null || scene == null)
+		{
+			return object.getWorldLocation();
+		}
+		return WorldPoint.fromLocalInstance(scene, local, object.getPlane());
+	}
+
+	/** Finds the object a menu entry refers to. Same approach as the core Object Markers plugin. */
+	private TileObject findTileObject(WorldView wv, int sceneX, int sceneY, int id)
+	{
+		Scene scene = wv.getScene();
+		if (scene == null)
+		{
+			return null;
+		}
+		Tile[][][] tiles = scene.getTiles();
+		int plane = wv.getPlane();
+		if (sceneX < 0 || sceneY < 0 || sceneX >= tiles[plane].length || sceneY >= tiles[plane][sceneX].length)
+		{
+			return null;
+		}
+		Tile tile = tiles[plane][sceneX][sceneY];
+		if (tile == null)
+		{
+			return null;
+		}
+		if (objectIdEquals(tile.getWallObject(), id))
+		{
+			return tile.getWallObject();
+		}
+		if (objectIdEquals(tile.getDecorativeObject(), id))
+		{
+			return tile.getDecorativeObject();
+		}
+		if (objectIdEquals(tile.getGroundObject(), id))
+		{
+			return tile.getGroundObject();
+		}
+		GameObject[] gameObjects = tile.getGameObjects();
+		if (gameObjects != null)
+		{
+			for (GameObject gameObject : gameObjects)
+			{
+				if (objectIdEquals(gameObject, id))
+				{
+					return gameObject;
+				}
+			}
+		}
+		return null;
+	}
+
+	private boolean objectIdEquals(TileObject object, int id)
+	{
+		if (object == null)
+		{
+			return false;
+		}
+		if (object.getId() == id)
+		{
+			return true;
+		}
+		// Examine sends the transformed (impostor) id, so check those too
+		ObjectComposition def = client.getObjectDefinition(object.getId());
+		if (def != null && def.getImpostorIds() != null)
+		{
+			for (int impostorId : def.getImpostorIds())
+			{
+				if (impostorId == id)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private void addPinnedEntries(MenuEntryAdded event, PinnedObject pinned, String name, int objectId,
+		boolean whitelisted, boolean blacklisted)
+	{
+		String target = event.getTarget();
+		int idx = -1;
+		client.getMenu().createMenuEntry(idx--)
+			.setOption(ColorUtil.wrapWithColorTag(blacklisted ? "Hider un-blacklist" : "Hider blacklist", BLACKLIST_COLOR))
+			.setTarget(target)
+			.setType(MenuAction.RUNELITE)
+			.onClick(e -> togglePinned(pinned, name, objectId, "blacklist", KEY_PINNED_BLACKLIST, !blacklisted, KEY_PINNED_WHITELIST));
+		client.getMenu().createMenuEntry(idx)
+			.setOption(ColorUtil.wrapWithColorTag(whitelisted ? "Hider un-whitelist" : "Hider whitelist", WHITELIST_COLOR))
+			.setTarget(target)
+			.setType(MenuAction.RUNELITE)
+			.onClick(e -> togglePinned(pinned, name, objectId, "whitelist", KEY_PINNED_WHITELIST, !whitelisted, KEY_PINNED_BLACKLIST));
+	}
+
+	/** Adds or removes one specific object. Adding removes it from the opposite list. */
+	private void togglePinned(PinnedObject pinned, String name, int objectId, String listName, String key, boolean add, String oppositeKey)
+	{
+		Set<PinnedObject> list = new LinkedHashSet<>(PinnedObject.parseAll(configManager.getConfiguration(SelectiveHiderConfig.GROUP, key)));
+		if (add)
+		{
+			Set<PinnedObject> opposite = new LinkedHashSet<>(PinnedObject.parseAll(configManager.getConfiguration(SelectiveHiderConfig.GROUP, oppositeKey)));
+			if (opposite.remove(pinned))
+			{
+				configManager.setConfiguration(SelectiveHiderConfig.GROUP, oppositeKey, PinnedObject.serializeAll(opposite));
+			}
+			if (KEY_PINNED_BLACKLIST.equals(key) && learnedObjectIds.remove(objectId))
+			{
+				saveLearnedIds();
+			}
+			list.add(pinned);
+		}
+		else
+		{
+			list.remove(pinned);
+		}
+		configManager.setConfiguration(SelectiveHiderConfig.GROUP, key, PinnedObject.serializeAll(list));
+
+		Color color = "blacklist".equals(listName) ? BLACKLIST_COLOR : WHITELIST_COLOR;
+		chatMessageManager.queue(QueuedMessage.builder()
+			.type(ChatMessageType.CONSOLE)
+			.runeLiteFormattedMessage("Selective Hider: " + (add ? "Added this " : "Removed this ") + name
+				+ (add ? " to the " : " from the ") + ColorUtil.wrapWithColorTag(listName, color) + ".")
+			.build());
+	}
+
+	/** Shift-click options for NPCs, which are added to the name lists. */
+	private void addListEntries(MenuEntryAdded event, String name,
 		boolean whitelisted, String whitelistKey,
 		boolean blacklisted, String blacklistKey)
 	{
@@ -274,20 +429,19 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			.setOption(ColorUtil.wrapWithColorTag(blacklisted ? "Hider un-blacklist" : "Hider blacklist", BLACKLIST_COLOR))
 			.setTarget(target)
 			.setType(MenuAction.RUNELITE)
-			.onClick(e -> toggleList(name, objectId, "blacklist", blacklistKey, !blacklisted, whitelistKey));
+			.onClick(e -> toggleList(name, "blacklist", blacklistKey, !blacklisted, whitelistKey));
 		client.getMenu().createMenuEntry(idx)
 			.setOption(ColorUtil.wrapWithColorTag(whitelisted ? "Hider un-whitelist" : "Hider whitelist", WHITELIST_COLOR))
 			.setTarget(target)
 			.setType(MenuAction.RUNELITE)
-			.onClick(e -> toggleList(name, objectId, "whitelist", whitelistKey, !whitelisted, blacklistKey));
+			.onClick(e -> toggleList(name, "whitelist", whitelistKey, !whitelisted, blacklistKey));
 	}
 
 	/**
 	 * Adds the name to (or removes it from) one list, keeping the other entries in it.
 	 * Adding also removes the name from the opposite list, so it's never on both.
-	 * Blacklisting an object also forgets it as a learned mechanic.
 	 */
-	private void toggleList(String name, int objectId, String listName, String key, boolean add, String oppositeKey)
+	private void toggleList(String name, String listName, String key, boolean add, String oppositeKey)
 	{
 		NameList list = NameList.parse(configManager.getConfiguration(SelectiveHiderConfig.GROUP, key));
 		if (add)
@@ -296,10 +450,6 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			if (opposite.contains(name))
 			{
 				configManager.setConfiguration(SelectiveHiderConfig.GROUP, oppositeKey, opposite.without(name).serialize());
-			}
-			if (KEY_BLACKLIST_OBJECTS.equals(key) && objectId != -1 && learnedObjectIds.remove(objectId))
-			{
-				saveLearnedIds();
 			}
 			configManager.setConfiguration(SelectiveHiderConfig.GROUP, key, list.with(name).serialize());
 		}
@@ -380,7 +530,8 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 		for (Integer id : unresolvedObjectIds)
 		{
 			String name = cacheObjectName(id);
-			affected |= s.whitelistObjects.names.contains(name) || s.blacklistObjects.names.contains(name);
+			affected |= s.whitelistObjects.names.contains(name) || s.blacklistObjects.names.contains(name)
+				|| s.pinnedNames.contains(name);
 		}
 		unresolvedObjectIds.clear();
 		if (affected)
@@ -611,7 +762,7 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			return s.showGroundItems;
 		}
 
-		return sceneryDecision(object, s);
+		return sceneryDecision(scene, object, s);
 	}
 
 	/**
@@ -740,9 +891,28 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			|| renderable instanceof DynamicObject;
 	}
 
-	private boolean sceneryDecision(TileObject object, Settings s)
+	private boolean sceneryDecision(Scene scene, TileObject object, Settings s)
 	{
 		int id = object.getId();
+
+		// Individually clicked objects beat name lists: they're the more specific choice
+		if (!s.pinnedNames.isEmpty())
+		{
+			String name = objectName(id);
+			if (name != null && s.pinnedNames.contains(name))
+			{
+				PinnedObject key = new PinnedObject(name, templateLocation(object, scene));
+				if (s.pinnedBlacklist.contains(key))
+				{
+					return false;
+				}
+				if (s.pinnedWhitelist.contains(key))
+				{
+					return true;
+				}
+			}
+		}
+
 		if (matchesObject(s.blacklistObjects, id))
 		{
 			return false;
@@ -783,6 +953,10 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 		final NameList whitelistObjects;
 		final NameList blacklistNpcs;
 		final NameList blacklistObjects;
+		final Set<PinnedObject> pinnedWhitelist;
+		final Set<PinnedObject> pinnedBlacklist;
+		/** Names of all pinned objects, for a cheap first check. */
+		final Set<String> pinnedNames;
 
 		private Settings()
 		{
@@ -800,6 +974,8 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			hideHiddenEntityUi = false;
 			whitelistNpcs = whitelistObjects = NameList.EMPTY;
 			blacklistNpcs = blacklistObjects = NameList.EMPTY;
+			pinnedWhitelist = pinnedBlacklist = Collections.emptySet();
+			pinnedNames = Collections.emptySet();
 		}
 
 		private Settings(SelectiveHiderConfig c)
@@ -820,11 +996,17 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 			whitelistObjects = NameList.parse(c.whitelistObjects());
 			blacklistNpcs = NameList.parse(c.blacklistNpcs());
 			blacklistObjects = NameList.parse(c.blacklistObjects());
+			pinnedWhitelist = PinnedObject.parseAll(c.pinnedWhitelistObjects());
+			pinnedBlacklist = PinnedObject.parseAll(c.pinnedBlacklistObjects());
+			Set<String> names = new HashSet<>();
+			pinnedWhitelist.forEach(o -> names.add(o.name));
+			pinnedBlacklist.forEach(o -> names.add(o.name));
+			pinnedNames = Collections.unmodifiableSet(names);
 		}
 
 		boolean hasObjectNames()
 		{
-			return !whitelistObjects.names.isEmpty() || !blacklistObjects.names.isEmpty();
+			return !whitelistObjects.names.isEmpty() || !blacklistObjects.names.isEmpty() || !pinnedNames.isEmpty();
 		}
 
 		static Settings from(SelectiveHiderConfig c)

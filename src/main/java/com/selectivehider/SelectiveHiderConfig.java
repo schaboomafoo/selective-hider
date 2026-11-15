@@ -170,7 +170,8 @@ public interface SelectiveHiderConfig extends Config
 
 	@ConfigItem(keyName = "shiftClickMenu", name = "Shift-click menu",
 		description = "Adds 'Hider whitelist' and 'Hider blacklist' when you shift-right-click an NPC or object.<br>"
-			+ "A chat message confirms the change; reopen this panel to see it in the lists.",
+			+ "NPCs are added to the lists by name. Objects are remembered individually<br>"
+			+ "(just the one you clicked); to affect every object with a name, type it in the lists.",
 		position = 0, section = advanced)
 	default boolean shiftClickMenu()
 	{
@@ -192,6 +193,29 @@ public interface SelectiveHiderConfig extends Config
 	default boolean forgetLearnedObjects()
 	{
 		return false;
+	}
+
+	@ConfigItem(keyName = "forgetPinnedObjects", name = "Forget clicked objects",
+		description = "Tick to forget every specific object you've whitelisted or blacklisted with the<br>"
+			+ "shift-click menu. It unticks itself. Name lists aren't affected.",
+		position = 3, section = advanced)
+	default boolean forgetPinnedObjects()
+	{
+		return false;
+	}
+
+	/** Internal storage for the shift-click menu: objects as name + tile. Hidden, never typed in. */
+	@ConfigItem(keyName = "pinnedWhitelistObjects", name = "", description = "", hidden = true)
+	default String pinnedWhitelistObjects()
+	{
+		return "";
+	}
+
+	/** Internal storage for the shift-click menu: objects as name + tile. Hidden, never typed in. */
+	@ConfigItem(keyName = "pinnedBlacklistObjects", name = "", description = "", hidden = true)
+	default String pinnedBlacklistObjects()
+	{
+		return "";
 	}
 
 	/** Internal storage for 'Mechanic objects (auto)'. Hidden: filled by the plugin, never typed in. */
