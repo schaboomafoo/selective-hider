@@ -769,16 +769,16 @@ public class SelectiveHiderPlugin extends Plugin implements RenderCallback
 		{
 			showSelf = true;
 			showOtherPlayers = false;
-			showNpcs = false;
+			showNpcs = true;
 			showPets = false;
-			showProjectiles = false;
-			showSpotanims = false;
-			showGroundItems = false;
-			showSpawnedObjects = false;
+			showProjectiles = true;
+			showSpotanims = true;
+			showGroundItems = true;
+			showSpawnedObjects = true;
 			showScenery = false;
-			showTerrain = false;
+			showTerrain = true;
 			showBoats = false;
-			hideHiddenEntityUi = true;
+			hideHiddenEntityUi = false;
 			whitelistNpcs = whitelistObjects = whitelistSpotanims = IdNameList.EMPTY;
 			blacklistNpcs = blacklistObjects = blacklistSpotanims = IdNameList.EMPTY;
 		}
